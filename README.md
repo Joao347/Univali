@@ -1,5 +1,5 @@
 # Trabalho M3 - Implementação e Análise de um Mini-Sistema de Arquivos em Memória em C
-[Repositório](https://github.com/Joao347/Univali/Sistemas_Operacionais/M3)
+[Repositório](https://github.com/Joao347/Univali/tree/main/Sistemas%20Operacionais/M3)
 
 ## Como compilar e executar o simulador
 
