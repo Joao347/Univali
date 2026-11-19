@@ -1,0 +1,55 @@
+mkdir documentos
+mkdir documentos
+mkdir a/b
+cd documentos
+pwd
+touch notas.txt numerico
+touch mensagem.txt caractere
+touch x.bin tipoerrado
+touch script.sh
+programa
+echo notas.txt 10 20,5 30
+echo notas.txt dez
+echo mensagem.txt Este texto tem mais de dezesseis bytes para ocupar varios blocos
+cat notas.txt
+cat mensagem.txt
+info notas.txt
+blocks mensagem.txt
+disk
+chmod 640 notas.txt
+chmod 999 notas.txt
+user visitante visitantes
+cat notas.txt
+echo notas.txt 1
+chmod 777 notas.txt
+rm notas.txt
+user colega alunos
+cat notas.txt
+echo notas.txt 5
+user root root
+chmod 000 mensagem.txt
+cat mensagem.txt
+exec mensagem.txt
+exec script.sh
+chmod 755 script.sh
+user aluno alunos
+exec script.sh
+chmod 644 mensagem.txt
+cp mensagem.txt copia.txt
+cp mensagem.txt ..
+mkdir backup
+mv copia.txt backup
+mv mensagem.txt backup/renomeado.txt
+cd backup
+ls
+cd ../..
+ls
+cd /naoexiste
+cat inexistente
+rm documentos/backup/copia.txt
+cd documentos/backup
+rm copia.txt
+blocks renomeado.txt
+disk
+comandoinvalido
+exit
