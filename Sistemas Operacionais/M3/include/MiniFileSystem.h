@@ -8,51 +8,78 @@
 #include <vector>
 
 class MiniFileSystem {
+public:
+    MiniFileSystem();
+
+    //interpreta uma linha de comando; retorna false quando o usuario pede para sair.
+    bool executarLinha(const std::string& linha);
+
+    //laco interativo: le comandos da entrada padrao ate "exit" ou fim da entrada.
+    void executar();
+
 private:
+    enum class ResultadoCaminho { Ok, PaiInexistente, NomeInvalido };
+
     std::unique_ptr<Diretorio> raiz;
     Diretorio* atual;
-    unsigned long long proximoId;
+    int proximoId;
     std::string usuarioAtual;
     std::string grupoAtual;
     DiscoSimulado disco;
 
+    //caminhos e busca na arvore
     static bool nomeValido(const std::string& nome);
-    static std::string dataHora(std::time_t instante);
-    static bool modoValido(const std::string& modo);
-    static bool converterTipo(const std::string& texto, TipoArquivo& tipo);
-    static int modoParaInteiro(const std::string& modo);
-    static std::string modoTexto(int modo);
-    static std::string modoOctal(int modo);
-    Diretorio* buscarDiretorio(Diretorio* base, const std::string& caminho) const;
-    bool separarDestino(const std::string& caminho, Diretorio*& destino, std::string& nome) const;
-    FCB* buscarArquivo(Diretorio* diretorio, const std::string& nome) const;
-    bool nomeOcupado(Diretorio* diretorio, const std::string& nome) const;
+    Diretorio* buscarDiretorio(const std::string& caminho) const;
+    ResultadoCaminho separarCaminho(const std::string& caminho, Diretorio*& pai,
+                                    std::string& nome) const;
+    Entrada* localizarArquivo(const std::string& cmd, const std::string& caminho,
+                              Diretorio** dirSaida = nullptr) const;
+    bool resolverDestino(const std::string& cmd, const std::string& destino,
+                         const std::string& nomeOrigem, Diretorio*& dir, std::string& nome) const;
     std::string caminhoCompleto(const Diretorio* diretorio) const;
-    int permissoesDoUsuario(const FCB& arquivo) const;
-    bool pode(const FCB& arquivo, int bit, const std::string& operacao) const;
-    static std::string lerCampo(const std::string& mensagem);
-    void mostrarAjuda() const;
-    void mostrarMenu() const;
 
-public:
-    MiniFileSystem();
-    void mkdir(const std::string& nome);
+    //protecao
+    bool verificarPermissao(const FCB& arquivo, unsigned int bit, const std::string& cmd,
+                            const std::string& caminho) const;
+    bool verificarDono(const FCB& arquivo, const std::string& cmd,
+                       const std::string& caminho) const;
+
+    //apoio as operacoes
+    std::shared_ptr<FCB> criarArquivo(Diretorio* dir, const std::string& nome, TipoArquivo tipo,
+                                      unsigned int modo);
+    int desvincular(Diretorio* dir, const std::string& nome);
+    void mensagemErroDisco(ResultadoDisco resultado, const std::string& cmd,
+                           const std::string& caminho, std::size_t bytes) const;
+    static std::string dataHora(std::time_t instante);
+    void imprimirLinhaArquivo(const Entrada& entrada) const;
+    void imprimirArvore(const Diretorio* dir, int nivel) const;
+    static void mostrarAjuda();
+
+    //comandos de diretorio
+    void mkdir(const std::string& caminho);
+    void rmdir(const std::string& caminho);
     void cd(const std::string& caminho);
     void pwd() const;
-    void ls() const;
-    void touch(const std::string& nome, TipoArquivo tipo = TipoArquivo::CARACTERE);
-    void echo(const std::string& nome, const std::string& texto);
-    void cat(const std::string& nome);
-    void info(const std::string& nome) const;
+    void ls(const std::string& caminho) const;
+    void tree(const std::string& caminho) const;
+
+    //comandos de arquivo
+    void touch(const std::string& caminho, const std::string& tipo);
+    void echo(const std::string& argumentos);
+    void cat(const std::string& caminho);
+    void truncate(const std::string& caminho);
+    void info(const std::string& caminho) const;
     void cp(const std::string& origem, const std::string& destino);
     void mv(const std::string& origem, const std::string& destino);
-    void rm(const std::string& nome);
-    void chmod(const std::string& modo, const std::string& nome);
+    void rm(const std::string& caminho);
+    void ln(const std::string& origem, const std::string& destino);
+
+    //protecao e disco
+    void chmod(const std::string& modo, const std::string& caminho);
     void usuario(const std::string& usuario, const std::string& grupo);
-    void executarArquivo(const std::string& nome);
-    void mostrarDisco() const;
-    void mostrarBlocos(const std::string& nome) const;
-    void executar();
+    void executarArquivo(const std::string& caminho);
+    void mostrarBlocos(const std::string& caminho) const;
+    void alloc(const std::string& modo);
 };
 
 #endif

@@ -1,55 +1,58 @@
+help
 mkdir documentos
-mkdir documentos
-mkdir a/b
+mkdir documentos/projetos
 cd documentos
 pwd
-touch notas.txt numerico
-touch mensagem.txt caractere
-touch x.bin tipoerrado
-touch script.sh
-programa
-echo notas.txt 10 20,5 30
-echo notas.txt dez
-echo mensagem.txt Este texto tem mais de dezesseis bytes para ocupar varios blocos
+touch notas.txt
+echo "Este e um arquivo de teste" > notas.txt
 cat notas.txt
-cat mensagem.txt
+echo segunda linha >> notas.txt
+cat notas.txt
 info notas.txt
-blocks mensagem.txt
-disk
+blocks notas.txt
+ls
 chmod 640 notas.txt
-chmod 999 notas.txt
+ls notas.txt
 user visitante visitantes
 cat notas.txt
-echo notas.txt 1
+echo tentativa > notas.txt
 chmod 777 notas.txt
 rm notas.txt
-user colega alunos
+user maria alunos
 cat notas.txt
-echo notas.txt 5
+echo tentativa > notas.txt
 user root root
-chmod 000 mensagem.txt
-cat mensagem.txt
-exec mensagem.txt
+chmod 000 notas.txt
+cat notas.txt
+chmod 640 notas.txt
+user aluno alunos
+cp notas.txt copia.txt
+mv copia.txt projetos/backup.txt
+ln notas.txt atalho.txt
+info atalho.txt
+rm notas.txt
+cat atalho.txt
+touch idade.txt numerico
+echo 42 > idade.txt
+echo quarenta > idade.txt
+touch logo.bin binario
+echo 48 65 6c 6c 6f 00 ff > logo.bin
+cat logo.bin
+truncate logo.bin
+blocks logo.bin
+touch script.sh programa
+echo "echo ola" > script.sh
 exec script.sh
 chmod 755 script.sh
-user aluno alunos
 exec script.sh
-chmod 644 mensagem.txt
-cp mensagem.txt copia.txt
-cp mensagem.txt ..
-mkdir backup
-mv copia.txt backup
-mv mensagem.txt backup/renomeado.txt
-cd backup
-ls
-cd ../..
-ls
-cd /naoexiste
-cat inexistente
-rm documentos/backup/copia.txt
-cd documentos/backup
-rm copia.txt
-blocks renomeado.txt
+exec atalho.txt
+tree /
 disk
-comandoinvalido
+cd /
+rmdir documentos
+cd documentos/projetos
+rm backup.txt
+cd ..
+rmdir projetos
+ls
 exit
