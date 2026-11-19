@@ -1,6 +1,7 @@
 #include "MiniFileSystem.h"
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -22,6 +23,26 @@ std::string MiniFileSystem::dataHora(std::time_t instante) {
     std::ostringstream saida;
     saida << std::put_time(info, "%d/%m/%Y %H:%M:%S");
     return saida.str();
+}
+
+bool MiniFileSystem::converterTipo(const std::string& texto, TipoArquivo& tipo) {
+    if (texto == "numerico" || texto == "numérico" || texto == "numero" || texto == "número") {
+        tipo = TipoArquivo::NUMERICO;
+        return true;
+    }
+    if (texto == "caractere" || texto == "texto") {
+        tipo = TipoArquivo::CARACTERE;
+        return true;
+    }
+    if (texto == "binario" || texto == "binário") {
+        tipo = TipoArquivo::BINARIO;
+        return true;
+    }
+    if (texto == "programa" || texto == "codigo" || texto == "código") {
+        tipo = TipoArquivo::PROGRAMA;
+        return true;
+    }
+    return false;
 }
 
 bool MiniFileSystem::modoValido(const std::string& modo) {
@@ -75,6 +96,15 @@ Diretorio* MiniFileSystem::buscarDiretorio(Diretorio* base, const std::string& c
 bool MiniFileSystem::separarDestino(const std::string& caminho, Diretorio*& destino,
                                     std::string& nome) const {
     if (caminho.empty()) return false;
+
+    // Destino que ja existe como diretorio: o chamador preserva o nome original.
+    Diretorio* diretorioExistente = buscarDiretorio(atual, caminho);
+    if (diretorioExistente) {
+        destino = diretorioExistente;
+        nome.clear();
+        return true;
+    }
+
     const std::size_t barra = caminho.find_last_of('/');
     if (barra == std::string::npos) {
         destino = atual;
@@ -113,7 +143,9 @@ std::string MiniFileSystem::caminhoCompleto(const Diretorio* diretorio) const {
 }
 
 int MiniFileSystem::permissoesDoUsuario(const FCB& arquivo) const {
-    if (usuarioAtual == "root" || usuarioAtual == arquivo.owner)
+    //como no Linux, root ignora r/w; para executar basta qualquer bit x estar ligado.
+    if (usuarioAtual == "root") return 6 | ((arquivo.permissoes & 0111) ? 1 : 0);
+    if (usuarioAtual == arquivo.owner)
         return (arquivo.permissoes >> 6) & 7;
     if (grupoAtual == arquivo.group) return (arquivo.permissoes >> 3) & 7;
     return arquivo.permissoes & 7;
@@ -152,17 +184,34 @@ void MiniFileSystem::ls() const {
     if (atual->diretorios.empty() && atual->arquivos.empty()) std::cout << "  (diretorio vazio)\n";
 }
 
-void MiniFileSystem::touch(const std::string& nome) {
+void MiniFileSystem::touch(const std::string& nome, TipoArquivo tipo) {
     if (!nomeValido(nome)) { std::cout << "Nome de arquivo invalido.\n"; return; }
     if (nomeOcupado(atual, nome)) { std::cout << "Ja existe um item com esse nome.\n"; return; }
-    atual->arquivos.push_back(std::make_unique<FCB>(nome, proximoId++, usuarioAtual, grupoAtual));
-    std::cout << "Arquivo criado: " << nome << " (permissao inicial 644).\n";
+    atual->arquivos.push_back(std::make_unique<FCB>(nome, proximoId++, usuarioAtual, grupoAtual, tipo));
+    std::cout << "Arquivo criado: " << nome << " | Tipo: "
+              << tipoArquivoParaTexto(tipo) << " (permissao inicial 644).\n";
 }
 
 void MiniFileSystem::echo(const std::string& nome, const std::string& texto) {
     FCB* arquivo = buscarArquivo(atual, nome);
     if (!arquivo) { std::cout << "Arquivo nao encontrado. Use touch antes.\n"; return; }
     if (!pode(*arquivo, 2, "escrever")) return;
+
+    // Arquivos numericos aceitam um ou mais valores numericos separados por espacos.
+    if (arquivo->tipo == TipoArquivo::NUMERICO) {
+        std::istringstream valores(texto);
+        std::string valor;
+        while (valores >> valor) {
+            std::replace(valor.begin(), valor.end(), ',', '.');
+            char* fim = nullptr;
+            std::strtod(valor.c_str(), &fim);
+            if (fim == valor.c_str() || *fim != '\0') {
+                std::cout << "Conteudo invalido: arquivo numerico aceita apenas numeros.\n";
+                return;
+            }
+        }
+    }
+
     if (disco.armazenar(*arquivo, texto)) std::cout << "Conteudo gravado em " << nome << ".\n";
 }
 
@@ -178,7 +227,7 @@ void MiniFileSystem::info(const std::string& nome) const {
     FCB* arquivo = buscarArquivo(atual, nome);
     if (!arquivo) { std::cout << "Arquivo nao encontrado.\n"; return; }
     std::cout << "Nome: " << arquivo->nome << "\nID unico: " << arquivo->id
-              << "\nTamanho: " << arquivo->tamanho << " bytes\nTipo: " << arquivo->tipo
+              << "\nTamanho: " << arquivo->tamanho << " bytes\nTipo: " << tipoArquivoParaTexto(arquivo->tipo)
               << "\nCriacao: " << dataHora(arquivo->criacao)
               << "\nModificacao: " << dataHora(arquivo->modificacao)
               << "\nUltimo acesso: " << dataHora(arquivo->acesso)
@@ -196,6 +245,7 @@ void MiniFileSystem::cp(const std::string& origem, const std::string& destinoCam
     if (!separarDestino(destinoCaminho, destino, nome)) {
         std::cout << "Diretorio ou nome de destino invalido.\n"; return;
     }
+    if (nome.empty()) nome = origem;
     if (nomeOcupado(destino, nome)) { std::cout << "Ja existe um item com esse nome no destino.\n"; return; }
 
     auto copia = std::make_unique<FCB>(nome, proximoId, usuarioAtual, grupoAtual);
@@ -222,6 +272,7 @@ void MiniFileSystem::mv(const std::string& origem, const std::string& destinoCam
     if (!separarDestino(destinoCaminho, destino, nome)) {
         std::cout << "Diretorio ou nome de destino invalido.\n"; return;
     }
+    if (nome.empty()) nome = origem;
     if (destino == atual && nome == origem) { std::cout << "O arquivo ja possui esse nome e local.\n"; return; }
     if (nomeOcupado(destino, nome)) { std::cout << "Ja existe um item com esse nome no destino.\n"; return; }
 
@@ -296,7 +347,7 @@ void MiniFileSystem::mostrarAjuda() const {
               << "  cd CAMINHO              muda de diretorio (aceita /, .. e caminhos)\n"
               << "  ls                      lista diretorios e arquivos\n"
               << "  pwd                     mostra o caminho atual\n"
-              << "  touch ARQUIVO           cria um arquivo vazio\n"
+              << "  touch ARQUIVO [TIPO]    cria arquivo; tipos: numerico, caractere, binario, programa\n"
               << "  echo ARQUIVO TEXTO      grava/substitui o conteudo (texto pode ter espacos)\n"
               << "  cat ARQUIVO             le o conteudo\n"
               << "  info ARQUIVO            mostra metadados e permissoes\n"
@@ -346,8 +397,20 @@ void MiniFileSystem::executar() {
         } else if (comando == "ls") ls();
         else if (comando == "pwd") pwd();
         else if (comando == "touch") {
-            entrada >> a;
-            if (a.empty()) std::cout << "Uso: touch ARQUIVO\n"; else touch(a);
+            entrada >> a >> b;
+            if (a.empty()) {
+                std::cout << "Uso: touch ARQUIVO [TIPO]\n";
+            } else {
+                TipoArquivo tipo = TipoArquivo::CARACTERE;
+                if (b.empty()) {
+                    std::cout << "Tipo do arquivo (numerico, caractere, binario, programa): ";
+                    if (!std::getline(std::cin, b)) break;
+                }
+                if (!converterTipo(b, tipo))
+                    std::cout << "Tipo invalido. Use: numerico, caractere, binario ou programa.\n";
+                else
+                    touch(a, tipo);
+            }
         } else if (comando == "echo") {
             entrada >> a;
             std::string texto;

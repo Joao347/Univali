@@ -19,6 +19,7 @@ private:
     static bool nomeValido(const std::string& nome);
     static std::string dataHora(std::time_t instante);
     static bool modoValido(const std::string& modo);
+    static bool converterTipo(const std::string& texto, TipoArquivo& tipo);
     static int modoParaInteiro(const std::string& modo);
     static std::string modoTexto(int modo);
     static std::string modoOctal(int modo);
@@ -39,7 +40,7 @@ public:
     void cd(const std::string& caminho);
     void pwd() const;
     void ls() const;
-    void touch(const std::string& nome);
+    void touch(const std::string& nome, TipoArquivo tipo = TipoArquivo::CARACTERE);
     void echo(const std::string& nome, const std::string& texto);
     void cat(const std::string& nome);
     void info(const std::string& nome) const;
