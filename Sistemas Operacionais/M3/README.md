@@ -1,485 +1,436 @@
-# Mini-Sistema de Arquivos em Memória
+# Mini File System – Implementação e Análise de um Mini-Sistema de Arquivos em Memória
 
-Trabalho M3 de **Sistemas Operacionais**
+**Sistemas Operacionais – Trabalho M3 – UNIVALI**
 
-Simulador de um sistema de arquivos Unix-like que roda **inteiramente em memória**: diretórios organizados em árvore, arquivos representados por um *File Control Block* (FCB) que faz o papel de inode, controle de acesso RWX para proprietário/grupo/outros com `chmod` numérico e um disco simulado dividido em blocos, com alocação indexada. Nenhum arquivo real do computador é criado ou alterado.
+Simulador de um sistema de arquivos Unix-like que funciona inteiramente em memória, escrito em C++17. Ele implementa:
 
-> **Sobre a linguagem:** uso de C++. Os conceitos exigidos continuam presentes — `struct` para o FCB e para os nós da árvore, ponteiros (`Diretorio* pai`, `Diretorio* atual`), `enum` para o tipo do arquivo, bitmasks para permissões e alocação dinâmica. A diferença é que `malloc`/`free` foram substituídos por `std::make_unique`/`std::unique_ptr`, que liberam a memória automaticamente (RAII) e eliminam *memory leaks* por construção.
+- uma árvore de diretórios;
+- arquivos representados por um File Control Block (FCB) que faz o papel de inode;
+- permissões RWX para proprietário, grupo e outros, guardadas em máscaras de bits;
+- um disco simulado (array de caracteres) dividido em blocos, com alocação indexada ou contígua.
 
----
+Nenhum arquivo real do computador é criado ou alterado.
 
-## Sumário
+## Requisitos do enunciado e onde estão
 
-1. [Estrutura do projeto](#1-estrutura-do-projeto)
-2. [Como compilar e executar](#2-como-compilar-e-executar)
-3. [Comandos do simulador](#3-comandos-do-simulador)
-4. [Escolhas de design e estruturas de dados](#4-escolhas-de-design-e-estruturas-de-dados)
-5. [Conceitos teóricos demonstrados](#5-conceitos-teóricos-demonstrados)
-6. [Exemplo de uso e comparação com o Linux](#6-exemplo-de-uso-e-comparação-com-o-linux)
-7. [Tratamento de erros](#7-tratamento-de-erros)
-8. [Gerenciamento de memória](#8-gerenciamento-de-memória)
-9. [Testes realizados em Linux](#9-testes-realizados-em-linux)
-10. [Limitações](#10-limitações)
+| Requisito | Onde está no código |
+| --- | --- |
+| 3.1 Árvore de diretórios (binária: primeiro filho / próximo irmão), `mkdir` e `cd` | `include/Diretorio.h`; comandos `mkdir`, `rmdir`, `cd`, `pwd`, `ls`, `tree` |
+| 3.2 FCB com nome, tamanho, tipo (enum), datas (`time_t`), ID único e permissões | `include/FCB.h` (`struct FCB`, `enum class TipoArquivo`) |
+| 3.2 `touch`, `echo >`, `cat`, `cp`, `mv`, `rm` | `src/MiniFileSystem.cpp` |
+| 3.3 RWX para owner/group/others com bitmask e `chmod` numérico | `include/Permissoes.h`, `src/Permissoes.cpp`; comando `chmod` |
+| 3.3 Definir e exibir permissões | `chmod`, `ls`, `info` |
+| 3.3 Verificar o "usuário atual" em toda operação | `verificarPermissao()` e `verificarDono()`; comandos `user` e `whoami` |
+| 3.4 Disco como array de `char` e método de alocação | `include/DiscoSimulado.h`, `src/DiscoSimulado.cpp`; comandos `disk`, `blocks`, `alloc` |
+| 5.2 Interface por linha de comando | prompt interativo (`aluno@minifs:/$`); também lê um roteiro pela entrada padrão |
+| 5.3 Tratamento de erros | mensagens no formato do Linux (`cat: x: Arquivo ou diretorio nao encontrado`) |
+| 5.4 Código comentado e gestão de memória | `unique_ptr`, `shared_ptr` e RAII; Valgrind sem vazamentos |
+| Bônus: links | `ln` cria links físicos (hard links) com contador de links no FCB |
 
----
-
-## 1. Estrutura do projeto
+## Estrutura do projeto
 
 ```text
 M3/
-├── include/
-│   ├── FCB.h              # File Control Block (o "inode") e enum TipoArquivo
-│   ├── Diretorio.h        # Nó da árvore de diretórios
-│   ├── DiscoSimulado.h    # Disco em blocos e alocação
-│   └── MiniFileSystem.h   # Interface do simulador (comandos)
-├── src/
-│   ├── DiscoSimulado.cpp  # Gravar, ler e liberar blocos
-│   └── MiniFileSystem.cpp # Comandos, navegação, permissões e menu
-├── main.cpp               # Ponto de entrada
-├── roteiro.txt            # Sessão de testes pronta (./mini_file_system < roteiro.txt)
-├── CMakeLists.txt
-└── README.md
+|-- include/
+|   |-- FCB.h              FCB (inode simulado) e enum de tipos
+|   |-- Permissoes.h       constantes e funções de bitmask RWX
+|   |-- DiscoSimulado.h    disco simulado e métodos de alocação
+|   |-- Diretorio.h        nó da árvore binária e entradas de arquivo
+|   `-- MiniFileSystem.h   estado do sistema e comandos
+|-- src/
+|   |-- Permissoes.cpp
+|   |-- DiscoSimulado.cpp
+|   `-- MiniFileSystem.cpp todos os comandos e o interpretador
+|-- testes/
+|   |-- demo.txt           roteiro que passa por todos os requisitos
+|   |-- erros.txt          casos de erro
+|   `-- fragmentacao.txt   alocação contígua x indexada
+|-- main.cpp
+|-- CMakeLists.txt
+`-- README.md
 ```
 
-| Módulo | Responsabilidade |
-|---|---|
-| `FCB.h` | Metadados de um arquivo: nome, tamanho, tipo, ID único, datas, dono, grupo, permissões e lista de blocos. |
-| `Diretorio.h` | Nó da árvore: nome, ponteiro para o pai, subdiretórios e arquivos. |
-| `DiscoSimulado` | Vetor de 4096 bytes dividido em 256 blocos de 16 bytes, com mapa de blocos livres/ocupados. |
-| `MiniFileSystem` | Interpretador de comandos, resolução de caminhos, operações de arquivo e verificação de permissões. |
+## Como compilar e executar
 
----
+O projeto usa só a biblioteca padrão. Foi testado no Ubuntu 24.04 com g++ 13.3 e clang++ 18, sem nenhum aviso com `-Wall -Wextra -pedantic`.
 
-## 2. Como compilar e executar
+### g++ (Linux, WSL ou MinGW)
 
-Requisitos: compilador com suporte a **C++17** (g++ 7+ ou clang 5+). O ambiente indicado é **Linux** ou **WSL**.
-
-### Linux / WSL com g++
-
-Instale o compilador, se necessário (Ubuntu/Debian):
+Na pasta do projeto:
 
 ```bash
-sudo apt update && sudo apt install -y g++
+g++ -std=c++17 -Wall -Wextra -pedantic -Iinclude main.cpp src/*.cpp -o mini_file_system
 ```
 
-Dentro da pasta `M3`:
-
-```bash
-g++ -std=c++17 -Wall -Wextra -pedantic -Iinclude main.cpp src/MiniFileSystem.cpp src/DiscoSimulado.cpp -o mini_file_system
-```
+Execute no Linux/WSL:
 
 ```bash
 ./mini_file_system
 ```
 
-### Com CMake
+No Windows com MinGW:
+
+```powershell
+.\mini_file_system.exe
+```
+
+### CMake
 
 ```bash
 cmake -S . -B build
-```
-
-```bash
 cmake --build build
-```
-
-```bash
 ./build/mini_file_system
 ```
 
-### Executando um roteiro de comandos
+### Executando um roteiro
 
-Como o simulador lê da entrada padrão, também é possível passar um arquivo com comandos (útil para demonstrações):
+O simulador também lê comandos de um arquivo. Nesse caso, cada comando é exibido depois do prompt, o que deixa a saída legível:
 
 ```bash
-./mini_file_system < roteiro.txt
+./mini_file_system < testes/demo.txt
+./mini_file_system < testes/erros.txt
+./mini_file_system < testes/fragmentacao.txt
 ```
 
-### Windows (MinGW)
+### Verificando a memória (opcional)
 
-O mesmo comando `g++` funciona no MinGW; execute com `.\mini_file_system.exe`.
-
----
-
-## 3. Comandos do simulador
-
-| Comando | Função | Equivalente Linux |
-|---|---|---|
-| `mkdir NOME` | Cria um diretório no diretório atual | `mkdir` |
-| `cd CAMINHO` | Navega; aceita `/`, `..`, `.`, caminhos relativos e absolutos | `cd` |
-| `ls` | Lista subdiretórios e arquivos (com permissões, tamanho e ID) | `ls -l` / `ls -i` |
-| `pwd` | Mostra o caminho atual | `pwd` |
-| `touch ARQUIVO [TIPO]` | Cria arquivo vazio; tipo: `numerico`, `caractere`, `binario` ou `programa` | `touch` |
-| `echo ARQUIVO TEXTO` | Grava (substitui) o conteúdo; o texto pode ter espaços | `echo "TEXTO" > ARQUIVO` |
-| `cat ARQUIVO` | Lê o conteúdo | `cat` |
-| `info ARQUIVO` | Mostra todos os metadados do FCB | `stat` |
-| `cp ORIGEM DESTINO` | Copia; destino pode ser nome, caminho ou diretório existente | `cp` |
-| `mv ORIGEM DESTINO` | Move/renomeia; destino pode ser nome, caminho ou diretório existente | `mv` |
-| `rm ARQUIVO` | Exclui o arquivo e libera seus blocos | `rm` |
-| `chmod MODO ARQUIVO` | Altera permissões com 3 dígitos octais (ex.: `640`) | `chmod 640` |
-| `user NOME GRUPO` | Troca o usuário/grupo simulado (`root` tem privilégios) | `su` / `sudo` |
-| `exec ARQUIVO` | Verifica a permissão de execução (não roda nada de verdade) | `./arquivo` |
-| `disk` | Ocupação do disco simulado | `df` |
-| `blocks ARQUIVO` | Blocos do disco usados pelo arquivo | `debugfs -R "blocks"` / `filefrag -v` |
-| `help` | Ajuda | — |
-| `exit` ou `sair` | Encerra | — |
-
-Observações:
-
-- Os comandos de arquivo (`cat`, `echo`, `rm`, `chmod`, `info`, `blocks`, `exec`) procuram o nome **no diretório atual**. `cp` e `mv` aceitam caminho no **destino**.
-- Se o tipo não for informado no `touch`, o simulador pergunta interativamente.
-- Usuário inicial: `aluno`, grupo `alunos`.
-
----
-
-## 4. Escolhas de design e estruturas de dados
-
-### 4.1 Árvore de diretórios
-
-```cpp
-struct Diretorio {
-    std::string nome;
-    Diretorio* pai;                                   // ponteiro "para cima" (..)
-    std::vector<std::unique_ptr<Diretorio>> diretorios; // filhos (dono da memória)
-    std::vector<std::unique_ptr<FCB>> arquivos;         // arquivos deste diretório
-};
+```bash
+valgrind --leak-check=full ./mini_file_system < testes/demo.txt > /dev/null
 ```
 
-- Cada nó **possui** seus filhos através de `unique_ptr`; o ponteiro `pai` é um ponteiro bruto que **não** possui o pai, apenas aponta para ele. Assim não há ciclos de posse e a destruição da raiz libera a árvore inteira.
-- O simulador mantém `raiz` (a `/`) e `atual` (o diretório de trabalho, equivalente ao *cwd* de um processo).
-- **Resolução de caminho** (`buscarDiretorio`): o caminho é quebrado por `/`; se começa com `/` a busca parte da raiz, senão de `atual`. `..` sobe pelo ponteiro `pai`, `.` é ignorado. É o mesmo algoritmo de *namei* do Unix, componente por componente.
-- **`pwd`** reconstrói o caminho subindo pelos ponteiros `pai` até a raiz.
+## Comandos
 
-### 4.2 FCB (inode simulado)
+| Comando | Função | Equivalente no Linux |
+| --- | --- | --- |
+| `mkdir CAMINHO` | cria diretório (o pai precisa existir) | `mkdir` |
+| `rmdir CAMINHO` | remove diretório vazio | `rmdir` |
+| `cd [CAMINHO]` | muda de diretório; sem argumento volta para `/` | `cd` |
+| `pwd` | mostra o diretório atual | `pwd` |
+| `ls [CAMINHO]` | lista inode, permissões, links, dono, grupo, tamanho, tipo e data | `ls -li` |
+| `tree [CAMINHO]` | desenha a árvore | `tree` |
+| `touch ARQ [TIPO]` | cria arquivo vazio; TIPO = `caractere`, `numerico`, `binario` ou `programa` | `touch` |
+| `echo TEXTO > ARQ` | grava, substituindo o conteúdo (cria o arquivo se não existir) | `echo >` |
+| `echo TEXTO >> ARQ` | acrescenta ao final | `echo >>` |
+| `cat ARQ` | mostra o conteúdo (binário em hexadecimal) | `cat` / `xxd` |
+| `truncate ARQ` | zera o conteúdo e libera os blocos | `truncate -s 0` |
+| `info ARQ` ou `stat ARQ` | mostra o FCB completo | `stat` |
+| `cp ORIGEM DESTINO` | copia (cria um FCB novo) | `cp` |
+| `mv ORIGEM DESTINO` | move ou renomeia (mesmo FCB) | `mv` |
+| `rm ARQ` | remove a entrada; libera os blocos quando o último link some | `rm` |
+| `ln ORIGEM DESTINO` | cria link físico | `ln` |
+| `chmod MODO ARQ` | altera permissões em octal (`640`, `0755`) | `chmod` |
+| `user NOME GRUPO` | troca o usuário atual (`su` também funciona) | `su` |
+| `whoami` | mostra usuário e grupo atuais | `whoami`, `id` |
+| `exec ARQ` | verifica o bit x e simula a execução de um programa | `./arquivo` |
+| `disk` | ocupação e mapa de blocos do disco | `df` |
+| `blocks ARQ` | bloco de índices do FCB e o trecho gravado em cada bloco | `debugfs` / `filefrag` |
+| `alloc [indexada\|contigua]` | mostra ou troca o método de alocação | – |
+| `help`, `exit` | ajuda e saída | – |
+
+Todos os comandos que recebem arquivos aceitam caminhos absolutos (`/docs/a.txt`) ou relativos (`../a.txt`). Em `cp`, `mv` e `ln`, se o destino for um diretório existente, o arquivo mantém o nome original dentro dele, como no Linux.
+
+## Escolhas de design e estruturas de dados
+
+```text
+ MiniFileSystem
+ |-- raiz ----------> unique_ptr<Diretorio> "/"
+ |-- atual ---------> Diretorio* (diretório de trabalho)
+ |-- disco ---------> DiscoSimulado { array<char, 4096> dados; array<bool, 256> ocupado; modo }
+ |-- usuarioAtual / grupoAtual -> usados em toda checagem de permissão
+
+ Diretorio "/"
+   |-- primeiroFilho -> "docs" --proximoIrmao--> "tmp"      (cada filho aponta de volta para o pai)
+   |-- arquivos:   Entrada "a.txt" <-> Entrada "b.txt"        (std::list)
+                        |                  |
+                        v                  v
+                 shared_ptr<FCB> #1   shared_ptr<FCB> #2 { id, nome, tamanho, tipo, datas,
+                                                           owner, group, permissoes,
+                                                           blocos = [3, 4, 9], links }
+                                                                     |
+                                     disco.dados: [ bloco 3 ][ bloco 4 ] ... [ bloco 9 ]
+```
+
+### FCB (`struct FCB`)
 
 ```cpp
-enum class TipoArquivo { NUMERICO, CARACTERE, BINARIO, PROGRAMA };
+enum class TipoArquivo { Caractere, Numerico, Binario, Programa };
 
 struct FCB {
-    unsigned long long id;            // número do inode
+    int id;                           //identificador unico (numero do inode simulado)
     std::string nome;
-    std::size_t tamanho;              // bytes
+    std::size_t tamanho;
     TipoArquivo tipo;
     std::time_t criacao, modificacao, acesso;
     std::string owner, group;
-    int permissoes;                   // bitmask rwxrwxrwx (ex.: 0644)
-    std::vector<std::size_t> blocos;  // bloco de índices (alocação indexada)
+    unsigned int permissoes;          //bitmask de 9 bits (ex.: 0644)
+    std::vector<std::size_t> blocos;  //bloco de indices
+    int links;                        //entradas de diretorio que apontam para o FCB
 };
 ```
 
-Todos os campos pedidos no enunciado (nome, tamanho, tipo como enum, datas em `time_t`, ID único e permissões em bitmask) estão no FCB. O ID vem de um contador global (`proximoId`) que só cresce — IDs nunca são reutilizados, como números de inode durante a vida de um sistema de arquivos simples.
+Os IDs vêm de um contador que só cresce, então um número de inode nunca é reutilizado.
 
-### 4.3 Disco simulado
+### Diretórios: árvore binária "primeiro filho / próximo irmão"
 
-```cpp
-class DiscoSimulado {
-    static constexpr std::size_t TAMANHO_BLOCO = 16;
-    static constexpr std::size_t QUANTIDADE_BLOCOS = 256;
-    std::vector<char> dados;     // o "disco": 4096 bytes contíguos
-    std::vector<bool> ocupado;   // mapa de bits de blocos livres
-};
-```
+Cada `Diretorio` tem três ponteiros:
 
-O disco é um vetor de `char` (o `char[]` sugerido no enunciado) e o mapa `ocupado` é o **bitmap de blocos livres**. O tamanho é pequeno de propósito para que seja fácil ver a divisão em blocos e provocar "disco cheio".
+- `pai`: ponteiro simples para o diretório de cima (`nullptr` na raiz), usado no `cd ..` e no `pwd`;
+- `primeiroFilho` (esquerda): `unique_ptr` para o primeiro subdiretório;
+- `proximoIrmao` (direita): `unique_ptr` para o próximo diretório do mesmo nível.
 
----
-
-## 5. Conceitos teóricos demonstrados
-
-### 5.1 Conceito de arquivo e seus atributos
-
-Um arquivo é um **tipo abstrato de dados**: para o usuário é um nome com conteúdo; para o sistema é um conjunto de atributos mais referências aos dados. No simulador, todos os atributos clássicos aparecem no comando `info` (análogo ao `stat`):
-
-| Atributo (teoria) | Campo no FCB |
-|---|---|
-| Nome | `nome` |
-| Identificador | `id` |
-| Tipo | `tipo` (`enum TipoArquivo`) |
-| Localização | `blocos` (índices no disco) |
-| Tamanho | `tamanho` |
-| Proteção | `owner`, `group`, `permissoes` |
-| Data e hora | `criacao`, `modificacao`, `acesso` |
-
-O **tipo** é uma classificação guardada no FCB, não deduzida pela extensão (como no Unix, onde `.txt` é só parte do nome). Para demonstrar que o tipo pode ter efeito, arquivos `numerico` só aceitam números (inteiros ou decimais, com ponto ou vírgula, separados por espaço).
-
-### 5.2 Operações com arquivos
-
-| Operação (teoria) | Comando | O que acontece internamente |
-|---|---|---|
-| Criar | `touch` | Novo FCB com ID único, tamanho 0, sem blocos, permissão `644`, dono = usuário atual. |
-| Escrever | `echo` | Verifica `w`; calcula blocos necessários, reserva-os **antes** de liberar os antigos e copia o texto bloco a bloco; atualiza `tamanho` e `modificacao`. |
-| Ler | `cat` | Verifica `r`; percorre a lista de blocos remontando o conteúdo até `tamanho` bytes; atualiza `acesso`. |
-| Reposicionar / truncar | `echo ARQUIVO` (texto vazio) | Trunca para 0 bytes e devolve todos os blocos ao bitmap. |
-| Copiar | `cp` | Verifica `r` na origem; cria **novo FCB** (novo ID, novos blocos) com o mesmo conteúdo, tipo e permissões. |
-| Mover / renomear | `mv` | Não copia dados: apenas move o **mesmo FCB** (mesmo ID, mesmos blocos) para outra entrada de diretório — como `rename(2)` no Unix, que só altera entradas de diretório. |
-| Excluir | `rm` | Libera os blocos no bitmap e destrói o FCB. |
-
-A diferença entre `cp` e `mv` é visível no simulador: após `cp`, `ls` mostra um ID novo; após `mv`, o ID e os blocos (`blocks`) continuam os mesmos.
-
-### 5.3 FCB e o "inode" simulado
-
-No Unix, o diretório guarda apenas pares *nome → número do inode*, e o inode guarda os metadados e os ponteiros para os blocos. Aqui o FCB cumpre o papel do inode: o diretório guarda os FCBs, e o FCB guarda os metadados e a lista de blocos. O campo `id` é o número do inode (o que `ls -i` mostraria). Ver `info` e `blocks` lado a lado mostra exatamente essa separação entre **metadados** e **dados**.
-
-### 5.4 Estrutura de diretórios em árvore
-
-A estrutura usada é a **árvore** (diretório de níveis arbitrários), e suas vantagens aparecem na prática:
-
-- **Eficiência de busca:** para achar um arquivo só é preciso percorrer os componentes do caminho, não todos os arquivos do sistema.
-- **Nomeação:** o mesmo nome pode existir em diretórios diferentes (`/documentos/notas.txt` e `/backup/notas.txt`); unicidade só é exigida dentro de um diretório (`nomeOcupado`).
-- **Agrupamento:** arquivos relacionados ficam no mesmo diretório; há caminhos **absolutos** (a partir de `/`) e **relativos** (a partir de `atual`), além de `.` e `..`.
-
-### 5.5 Proteção de acesso: RWX, proprietário/grupo/outros e `chmod` com bitmask
-
-As permissões são um inteiro de 9 bits, três para cada classe:
+Como cada nó tem no máximo dois filhos na estrutura (esquerda e direita), a árvore é binária. Mesmo assim, uma pasta pode ter qualquer número de subpastas, encadeadas pelo `proximoIrmao`:
 
 ```text
-  owner   group   others
-  r w x   r w x   r w x
-  8 7 6   5 4 3   2 1 0   ← posição do bit
-  4 2 1   4 2 1   4 2 1   ← valor octal de cada bit
+Árvore de pastas             Árvore binária (esq = primeiro filho, dir = próximo irmão)
+
+        /                     /
+     /  |  \                  `-esq-> docs -dir-> tmp -dir-> home
+  docs tmp home                        `-esq-> projetos
+   |
+ projetos
 ```
 
-**`chmod` numérico** — cada dígito octal vira 3 bits:
+- `mkdir` chama `adicionarFilho`, que percorre os irmãos e encaixa o novo nó no fim, mantendo a ordem de criação.
+- `rmdir` chama `removerFilho`, que liga o irmão anterior ao seguinte. O `unique_ptr` do nó removido libera a memória.
+- `buscarFilho`, `ls` e `tree` percorrem a lista `primeiroFilho → proximoIrmao → ...`.
 
-```cpp
-// "640" -> 6*64 + 4*8 + 0 = 0640 = 110 100 000 (rw- r-- ---)
-return (modo[0] - '0') * 64 + (modo[1] - '0') * 8 + (modo[2] - '0');
-```
+Cada nó é dono do primeiro filho e do próximo irmão, então destruir a raiz libera a árvore inteira automaticamente.
 
-**Escolha da classe** — deslocamento e máscara `& 7` isolam os 3 bits da classe do usuário atual:
+### Entradas de diretório separadas do FCB
 
-```cpp
-if (usuarioAtual == arquivo.owner) return (arquivo.permissoes >> 6) & 7; // owner
-if (grupoAtual   == arquivo.group) return (arquivo.permissoes >> 3) & 7; // group
-return arquivo.permissoes & 7;                                           // others
-```
+Os arquivos de um diretório ficam em uma `std::list<Entrada>`, em que `Entrada { nome, shared_ptr<FCB> }` liga um nome a um FCB. Essa separação permite:
 
-**Verificação** — antes de cada operação, um `AND` com o bit da operação (`r = 4`, `w = 2`, `x = 1`) decide se ela prossegue:
+- `mv`: cria uma entrada nova e apaga a antiga, sem tocar no FCB nem nos blocos;
+- `ln`: cria uma segunda entrada para o mesmo FCB e incrementa `links`;
+- `rm`: apaga a entrada e decrementa `links`; os blocos só voltam para o disco quando `links` chega a zero.
 
-```cpp
-if ((permissoesDoUsuario(arquivo) & bit) != 0) return true;
-std::cout << "Permissao negada: ...";
-```
+O `shared_ptr` é usado porque, com links físicos, um mesmo FCB pode ter várias entradas, até em diretórios diferentes. O FCB é destruído quando a última entrada some. A `std::list` mantém as referências válidas quando outras entradas são incluídas ou removidas.
 
-| Operação | Bit verificado |
-|---|---|
-| `cat`, `cp` (origem) | `r` (4) |
-| `echo` | `w` (2) |
-| `exec` | `x` (1) |
-| `chmod`, `mv`, `rm` | ser o proprietário ou `root` |
+O campo `nome` do FCB guarda o nome com que o arquivo foi criado, como pede o enunciado. Ele acompanha o `mv` enquanto o arquivo tiver um único link. Com vários links, cada entrada tem o seu nome, e o `info` mostra os dois.
 
-Como no Unix, **apenas uma classe é aplicada**: se você é o dono, valem os bits do dono, mesmo que "outros" tenha mais permissões. O "usuário atual" é a variável `usuarioAtual`/`grupoAtual`, trocada com `user`. O usuário **`root`** segue a regra do Linux: lê e escreve qualquer arquivo e só executa se algum bit `x` estiver ligado.
+### Disco simulado
 
-A verificação ocorre em **toda** tentativa de acesso e a operação é bloqueada no próprio simulador, independentemente da vontade do usuário — é a ideia de **bloqueio obrigatório** (*mandatory*) pedida no enunciado.
+O disco é um `std::array<char, 4096>` dividido em 256 blocos de 16 bytes. Um `std::array<bool, 256>` funciona como mapa de blocos livres. A gravação acontece em quatro passos:
 
-Em `rm` e `mv` foi adotada a regra "somente o dono ou root", uma simplificação do *sticky bit* (no Linux real, excluir depende da permissão `w` do diretório, que aqui não é simulada).
+1. calcula quantos blocos são necessários (⌈tamanho / 16⌉);
+2. escolhe os blocos novos **antes** de liberar os antigos, para que um erro de falta de espaço não destrua o conteúdo anterior;
+3. libera os blocos antigos que não foram reaproveitados;
+4. divide o conteúdo em pedaços de 16 bytes, copia cada pedaço para o seu bloco e grava a lista de índices no FCB.
 
-### 5.6 Simulação da alocação de blocos
+### Usuário atual
 
-O enunciado cita três métodos; o simulador implementa a **alocação indexada**:
+O usuário e o grupo atuais são duas strings no `MiniFileSystem`, trocadas pelo comando `user`. O usuário inicial é `aluno`, do grupo `alunos`. O usuário `root` recebe o tratamento do Linux.
 
-| Método | Como funciona | Prós | Contras |
-|---|---|---|---|
-| Contígua | Arquivo ocupa blocos consecutivos; FCB guarda início + tamanho | Acesso sequencial e direto rápidos | Fragmentação externa; difícil crescer o arquivo |
-| Encadeada | Cada bloco aponta para o próximo | Sem fragmentação externa | Acesso direto lento; um ponteiro corrompido perde o resto |
-| **Indexada (usada)** | Um **bloco de índices** lista todos os blocos do arquivo | Acesso direto; sem fragmentação externa; arquivo cresce fácil | Espaço extra para o índice |
+## Conceitos teóricos demonstrados
 
-No simulador, o vetor `FCB::blocos` é o bloco de índices. Exemplo com um texto de 64 bytes e blocos de 16 bytes:
+### Arquivo e seus atributos
+
+Para o sistema, um arquivo é um tipo abstrato de dado: o usuário enxerga um nome e um conteúdo, e o sistema guarda os atributos no FCB. O comando `info` mostra todos eles: nome, identificador, tipo, tamanho, proteção, dono, grupo, links e as três datas.
+
+Cada operação atualiza a data correspondente. A gravação (`echo`, `truncate`) muda a data de modificação. A leitura (`cat`, `cp`, `exec`) muda a data de último acesso. O `touch` em um arquivo existente atualiza as duas.
+
+O tipo é um `enum class` e muda o comportamento do arquivo:
+
+| Tipo | Gravação (`echo`) | Leitura (`cat`) | `exec` |
+| --- | --- | --- | --- |
+| `caractere` | texto + `\n` | texto | recusa: não é programa |
+| `numerico` | só aceita um número por linha (`echo quarenta > idade.txt` é recusado) | texto | recusa |
+| `binario` | bytes em hexadecimal (`echo 48 65 6c 6c 6f > logo.bin`) | dump hexadecimal | recusa |
+| `programa` | texto + `\n` | texto | simula a execução se houver bit x |
+
+### Operações com arquivos
+
+As operações básicas são feitas sobre as estruturas simuladas:
+
+- **criar**: `touch` e `echo >`;
+- **escrever**: `echo >` substitui o conteúdo e `echo >>` acrescenta;
+- **ler**: `cat`;
+- **reposicionar/renomear**: `mv`;
+- **copiar**: `cp`;
+- **truncar**: `truncate` zera o arquivo e devolve todos os blocos;
+- **excluir**: `rm`.
+
+### File Control Block e inode simulado
+
+O FCB separa a identidade do arquivo (o inode, `id`) do nome usado para encontrá-lo (a entrada de diretório). Isso aparece em três comandos:
+
+- `mv`: o arquivo muda de nome e de diretório, mas continua com o mesmo inode;
+- `cp`: cria um FCB novo, com outro inode e outros blocos;
+- `ln`: duas entradas passam a mostrar o mesmo inode, e o `ls` exibe 2 na coluna de links. Depois de `rm` em uma delas, o conteúdo continua acessível pela outra.
+
+### Estrutura de diretórios em árvore
+
+A árvore traz as três vantagens vistas na disciplina:
+
+- **Nomeação**: nomes só precisam ser únicos dentro do próprio diretório. Dois `x.txt` podem existir em `/` e em `/docs`, e o caminho completo identifica cada um.
+- **Agrupamento**: arquivos relacionados ficam juntos (`documentos/projetos`), e `tree` mostra a hierarquia.
+- **Eficiência**: a busca segue apenas o caminho indicado, um nível por vez, em vez de varrer todos os arquivos do sistema.
+
+Caminhos absolutos partem da raiz e caminhos relativos partem do ponteiro `atual`. `.` e `..` funcionam em qualquer posição do caminho. O `rmdir` só remove diretórios vazios e recusa remover a raiz ou um diretório que contém o diretório atual.
+
+### Proteção de acesso RWX e chmod com bitmask
+
+As permissões ocupam 9 bits de um `unsigned int`, no mesmo formato do Linux:
 
 ```text
-Conteúdo: "Este texto tem mais de dezesseis bytes para ocupar varios blocos" (64 bytes)
-
-FCB mensagem.txt                     Disco (256 blocos x 16 bytes)
-┌───────────────────┐                ┌────┬──────────────────┐
-│ id = 2            │                │  0 │ (notas.txt)      │
-│ tamanho = 64      │      ┌───────► │  1 │ "Este texto tem m"│
-│ blocos = [1,2,3,4]│ ─────┼───────► │  2 │ "ais de dezesseis"│
-└───────────────────┘      ├───────► │  3 │ " bytes para ocup"│
-                           └───────► │  4 │ "ar varios blocos"│
-                                     │  5 │ livre            │
-                                     └────┴──────────────────┘
+bit:    8 7 6   5 4 3   2 1 0
+        r w x   r w x   r w x
+        owner   group   others        0640 = 110 100 000 = rw-r-----
 ```
 
-Detalhes do algoritmo (`DiscoSimulado::armazenar`):
+- **`chmod 640`**: cada dígito octal vira 3 bits (`modo = (modo << 3) | digito`).
+- **Verificação de acesso**: o simulador descobre a classe do usuário (dono, grupo ou outros), desloca os bits dessa classe para o fim (`>> 6`, `>> 3` ou `>> 0`), aplica a máscara `& 7` e testa o bit da operação (`LEITURA = 4`, `ESCRITA = 2`, `EXECUCAO = 1`).
+- **Exibição**: `permissoes::paraTexto` percorre os 9 bits e escreve `r`, `w`, `x` ou `-`.
 
-1. Calcula `ceil(tamanho / 16)` blocos necessários.
-2. Reaproveita os blocos que o arquivo já tinha e procura os demais no bitmap (*first-fit*). Como a alocação é indexada, os blocos **não precisam ser contíguos** — após exclusões, um arquivo novo pode receber blocos espalhados, e `blocks` mostra isso.
-3. Se não houver espaço, a gravação é cancelada **sem perder o conteúdo antigo** (os blocos novos são escolhidos antes de liberar os antigos).
-4. O último bloco pode ficar parcialmente ocupado (**fragmentação interna**); por isso a leitura usa `tamanho` para saber onde parar.
+A verificação acontece em toda operação, e uma operação negada não altera nada (bloqueio obrigatório):
 
-`disk` mostra o total de blocos ocupados e livres, e `rm` devolve os blocos ao bitmap.
+| Operação | Exige |
+| --- | --- |
+| `cat`, `cp` (origem), `blocks` (conteúdo) | r |
+| `echo >`, `truncate` | w |
+| `echo >>` | r e w (o conteúdo atual precisa ser lido) |
+| `exec` | x |
+| `chmod`, `mv`, `rm` | ser o proprietário ou root |
+| `ln` | ser o proprietário ou ter r e w (regra `protected_hardlinks` do Linux) |
 
----
+Como no Linux, a classe é escolhida uma única vez: se o usuário é o dono, valem só os bits do dono, mesmo que o grupo tenha mais permissões. O `root` ignora r e w, e só executa se alguma classe tiver o bit x.
 
-## 6. Exemplo de uso e comparação com o Linux
-
-Sessão real do simulador (o cabeçalho que se repete a cada comando foi omitido):
+As mensagens de bloqueio explicam o motivo:
 
 ```text
-/ $ mkdir documentos
-Diretorio criado: documentos
-/ $ cd documentos
-Diretorio atual: /documentos
-/documentos $ touch notas.txt numerico
-Arquivo criado: notas.txt | Tipo: numerico (permissao inicial 644).
-/documentos $ echo notas.txt 10 20,5 30
-Conteudo gravado em notas.txt.
-/documentos $ echo notas.txt dez
-Conteudo invalido: arquivo numerico aceita apenas numeros.
-/documentos $ touch mensagem.txt caractere
-Arquivo criado: mensagem.txt | Tipo: caractere (permissao inicial 644).
-/documentos $ echo mensagem.txt Este texto tem mais de dezesseis bytes para ocupar varios blocos
-Conteudo gravado em mensagem.txt.
-/documentos $ blocks mensagem.txt
-Arquivo 'mensagem.txt' (ID 2) usa os blocos: 1, 2, 3, 4
-Bytes armazenados: 64
-/documentos $ info notas.txt
-Nome: notas.txt
-ID unico: 1
-Tamanho: 10 bytes
-Tipo: numerico
-Criacao: 18/11/2026 23:10:27
-Modificacao: 18/11/2026 23:10:27
-Ultimo acesso: 18/11/2026 23:10:27
-Proprietario: aluno
-Grupo: alunos
-Permissoes: 644 (rw-r--r--)
-/documentos $ chmod 640 notas.txt
-Permissoes de notas.txt alteradas para 640 (rw-r-----).
-/documentos $ user visitante visitantes
-Usuario atual: visitante | Grupo atual: visitantes
-/documentos $ cat notas.txt
-Permissao negada: usuario 'visitante' nao pode ler o arquivo 'notas.txt'.
-/documentos $ user colega alunos
-Usuario atual: colega | Grupo atual: alunos
-/documentos $ cat notas.txt
-Conteudo de notas.txt:
-10 20,5 30
-/documentos $ echo notas.txt 5
-Permissao negada: usuario 'colega' nao pode escrever o arquivo 'notas.txt'.
-/documentos $ user aluno alunos
-Usuario atual: aluno | Grupo atual: alunos
-/documentos $ mkdir backup
-Diretorio criado: backup
-/documentos $ cp mensagem.txt copia.txt
-Arquivo copiado para /documentos/copia.txt.
-/documentos $ mv mensagem.txt backup/renomeado.txt
-Arquivo movido/renomeado para /documentos/backup/renomeado.txt.
-/documentos $ ls
-Conteudo de /documentos:
-  [DIR]  backup
-  [FILE] rw-r----- notas.txt (10 bytes, ID 1)
-  [FILE] rw-r--r-- copia.txt (64 bytes, ID 3)
-/documentos $ disk
-Disco simulado: 256 blocos de 16 bytes (4096 bytes no total).
-Blocos ocupados: 9 | Livres: 247
+visitante@minifs:/documentos$ cat notas.txt
+cat: notas.txt: Permissao negada (usuario 'visitante' esta na classe 'outros' e nao tem leitura (r); permissoes rw-r-----)
 ```
 
-Note que `copia.txt` recebeu um **ID novo** (3) e blocos próprios, enquanto `renomeado.txt` manteve o **ID 2** e os blocos 1–4 do original.
+### Simulação da alocação de blocos
 
-### O mesmo roteiro no Linux real
+Os três métodos clássicos são:
 
-```bash
-mkdir documentos && cd documentos
-echo "10 20,5 30" > notas.txt
-stat notas.txt                 # Inode, Size, Access: (0644/-rw-r--r--), Uid, Gid, datas
-chmod 640 notas.txt
-ls -l notas.txt                # -rw-r----- 1 aluno alunos 11 ... notas.txt
-sudo -u visitante cat notas.txt   # cat: notas.txt: Permission denied
-cp notas.txt copia.txt && ls -i   # copia.txt tem inode diferente
-mv copia.txt backup.txt && ls -i  # backup.txt mantém o inode de copia.txt
+| Método | Como o arquivo é localizado | Vantagem | Desvantagem |
+| --- | --- | --- | --- |
+| Contígua | bloco inicial + tamanho | leitura sequencial e acesso direto rápidos | fragmentação externa; o arquivo não cresce se o vizinho estiver ocupado |
+| Encadeada | cada bloco aponta para o próximo | sem fragmentação externa | acesso direto lento (precisa seguir a cadeia); um ponteiro corrompido perde o resto |
+| Indexada | um bloco de índices lista todos os blocos | sem fragmentação externa e com acesso direto | espaço extra para o índice |
+
+O simulador implementa **indexada** (padrão) e **contígua**, escolhidas com `alloc`. Nas duas, o FCB guarda o vetor de índices `blocos`. Na contígua, esse vetor sempre contém números consecutivos.
+
+- **Indexada**: reaproveita os blocos que o arquivo já tinha e completa com os primeiros blocos livres.
+- **Contígua**: procura a primeira sequência de blocos vizinhos livres que caiba o arquivo (first-fit).
+
+O comando `blocks` mostra como o conteúdo foi dividido:
+
+```text
+aluno@minifs:/documentos$ blocks notas.txt
+Arquivo 'notas.txt' (inode 1): 41 bytes em 3 bloco(s) de 16 bytes
+Bloco de indices no FCB: [0, 1, 2]
+  indice  0 -> bloco   0: |Este e um arquiv| 16 byte(s)
+  indice  1 -> bloco   1: |o de teste.segun| 16 byte(s)
+  indice  2 -> bloco   2: |da linha.       | 9 byte(s) (fragmentacao interna)
 ```
 
-| Situação | Simulador | Linux |
-|---|---|---|
-| Metadados | `info` mostra ID, tamanho, tipo, datas, dono, grupo, modo | `stat` mostra inode, tamanho, datas, Uid/Gid, modo |
-| Permissões em texto | `rw-r-----` no `ls` e no `info` | `-rw-r-----` no `ls -l` (o 1º caractere é o tipo) |
-| Acesso negado | `Permissao negada: ...` | `Permission denied` |
-| `cp` | Novo ID, novos blocos | Novo inode, novos blocos |
-| `mv` no mesmo FS | Mesmo ID, mesmos blocos | Mesmo inode (só muda a entrada de diretório) |
-| `root` | Ignora `r`/`w`; precisa de algum `x` para executar | Igual |
-| Tamanho de `echo` | Não adiciona `\n` (10 bytes) | `echo` adiciona `\n` (11 bytes) |
-| Blocos | 16 bytes, visíveis com `blocks` | Normalmente 4096 bytes, visíveis com `filefrag -v`/`debugfs` |
+O roteiro `testes/fragmentacao.txt` compara os dois métodos:
 
----
+1. enche o disco;
+2. apaga dois arquivos de 1 bloco que não são vizinhos (sobram os blocos 252 e 254);
+3. tenta gravar 21 bytes, que precisam de 2 blocos.
 
-## 7. Tratamento de erros
+Na alocação contígua, a gravação falha por fragmentação externa. Na indexada, ela usa os blocos 252 e 254:
+
+```text
+echo: q.txt: Ha 2 blocos livres, mas nenhuma sequencia contigua de 2 blocos (fragmentacao externa da alocacao contigua)
+...
+Bloco de indices no FCB: [252, 254]
+```
+
+Também aparece a **fragmentação interna**: o último bloco de um arquivo pode ficar parcialmente vazio, desperdiçando até 15 bytes.
+
+## Tratamento de erros
 
 | Situação | Mensagem |
-|---|---|
-| Arquivo inexistente | `Arquivo nao encontrado.` |
-| Diretório inexistente | `Diretorio nao encontrado.` |
-| Nome inválido (vazio, `.`, `..` ou contendo `/`) | `Nome de arquivo invalido.` / `Nome de diretorio invalido.` |
-| Nome já usado no diretório | `Ja existe um item com esse nome.` |
-| Sem permissão de leitura/escrita/execução | `Permissao negada: usuario 'X' nao pode ler/escrever/executar o arquivo 'Y'.` |
-| Não é dono nem root (`chmod`/`mv`/`rm`) | `Permissao negada: somente o proprietario ou root pode ...` |
-| Modo do `chmod` inválido (ex.: `999`, `64`) | `Modo invalido. Use tres digitos octais ...` |
-| Tipo de arquivo desconhecido | `Tipo invalido. Use: numerico, caractere, binario ou programa.` |
-| Conteúdo não numérico em arquivo `numerico` | `Conteudo invalido: arquivo numerico aceita apenas numeros.` |
-| Disco cheio | `Disco simulado cheio: espaco insuficiente.` (conteúdo anterior preservado) |
-| Destino de `cp`/`mv` inválido | `Diretorio ou nome de destino invalido.` |
-| Argumentos faltando | `Uso: ...` |
-| Comando inexistente | `Comando desconhecido. Digite 'help'.` |
+| --- | --- |
+| arquivo ou diretório inexistente | `cat: fantasma.txt: Arquivo ou diretorio nao encontrado` |
+| diretório pai inexistente | `mkdir: a/b: Diretorio pai nao encontrado` |
+| nome inválido (vazio, `.`, `..`, com `/`, espaço ou mais de 63 caracteres) | `mkdir: ..: Nome invalido (...)` |
+| nome já usado | `mkdir: nao foi possivel criar 'x.txt': Arquivo existe` |
+| tipo errado de alvo | `cd: x.txt: Nao e um diretorio`, `cat: docs: E um diretorio` |
+| permissão negada | `echo: notas.txt: Permissao negada (...)` |
+| não é o dono | `chmod: notas.txt: Operacao nao permitida (somente o proprietario 'aluno' ou root)` |
+| modo de chmod inválido | `chmod: modo invalido '999' (use 3 digitos octais de 0 a 7, ex.: 644, 750)` |
+| conteúdo incompatível com o tipo | `echo: idade.txt: arquivo numerico; 'quarenta' nao e um numero` |
+| disco cheio | `echo: g4.txt: Nao ha espaco no disco simulado (precisa de 63 blocos, ha 51 livres)` |
+| fragmentação externa | `Ha 2 blocos livres, mas nenhuma sequencia contigua de 2 blocos (...)` |
+| `rmdir` em diretório não vazio ou em uso | `Diretorio nao vazio`, `Dispositivo ou recurso esta ocupado` |
+| `cp`/`mv` para o próprio arquivo | `cp: 'x.txt' e 'x.txt' sao o mesmo arquivo` |
+| argumentos faltando ou sobrando | `Uso: cp ORIGEM DESTINO` |
+| comando inexistente | `foo: comando nao encontrado (digite 'help')` |
 
-Fim da entrada (Ctrl+D ou fim do arquivo de roteiro) encerra o programa normalmente.
+## Gerenciamento de memória
 
----
+| Estrutura | Dono | Liberada quando |
+| --- | --- | --- |
+| `Diretorio` | `unique_ptr` no pai (`primeiroFilho`) ou no irmão anterior (`proximoIrmao`); a raiz no `MiniFileSystem` | `rmdir` ou fim do programa |
+| `Entrada` | `std::list` do diretório | `rm`, `mv` ou destruição do diretório |
+| `FCB` | `shared_ptr` em cada entrada que aponta para ele | a última entrada é removida |
+| vetor `blocos` do FCB | o próprio FCB | próxima gravação ou destruição do FCB |
+| disco simulado | membro do `MiniFileSystem` | fim do programa |
 
-## 8. Gerenciamento de memória
+Nenhum `new` ou `delete` aparece no código: toda a memória é liberada automaticamente (RAII). Os três roteiros da pasta `testes/` foram executados no Valgrind (`--leak-check=full`) e com `-fsanitize=address,undefined`. Resultado: `All heap blocks were freed -- no leaks are possible` e 0 erros.
 
-- Toda alocação dinâmica é feita com `std::make_unique` e a posse fica em `std::unique_ptr` (o raiz no `MiniFileSystem`, os filhos e os FCBs nos vetores do `Diretorio`).
-- `rm` apaga o `unique_ptr` do vetor → o FCB é destruído na hora; `mv` **transfere** a posse com `std::move`, sem copiar nem vazar.
-- Ao sair, destruir `raiz` destrói recursivamente toda a árvore (RAII). Não há `new`/`delete` manuais.
-- Verificação com Valgrind no Linux:
+## Exemplo de uso
 
-```bash
-g++ -std=c++17 -g -Iinclude main.cpp src/*.cpp -o mini_file_system
-valgrind --leak-check=full ./mini_file_system < roteiro.txt
+```text
+aluno@minifs:/$ mkdir documentos
+Diretorio criado: documentos
+aluno@minifs:/$ cd documentos
+aluno@minifs:/documentos$ echo "Este e um arquivo de teste" > notas.txt
+Arquivo criado: notas.txt (inode 1, permissoes 644 rw-r--r--)
+27 bytes gravados em notas.txt (2 bloco(s), alocacao indexada)
+aluno@minifs:/documentos$ chmod 640 notas.txt
+Permissoes de notas.txt: 644 (rw-r--r--) -> 640 (rw-r-----)
+aluno@minifs:/documentos$ user maria alunos
+Usuario atual: maria | Grupo: alunos
+maria@minifs:/documentos$ cat notas.txt
+Este e um arquivo de teste
+maria@minifs:/documentos$ echo tentativa > notas.txt
+echo: notas.txt: Permissao negada (usuario 'maria' esta na classe 'grupo' e nao tem escrita (w); permissoes rw-r-----)
+maria@minifs:/documentos$ user aluno alunos
+Usuario atual: aluno | Grupo: alunos
+aluno@minifs:/documentos$ ln notas.txt atalho.txt
+Link fisico criado: atalho.txt -> inode 1 (agora com 2 links)
+aluno@minifs:/documentos$ rm notas.txt
+Removido: notas.txt (inode 1 continua existindo: 1 link(s) restante(s))
+aluno@minifs:/documentos$ cat atalho.txt
+Este e um arquivo de teste
 ```
 
-Resultado esperado: `All heap blocks were freed -- no leaks are possible`.
+O roteiro completo está em `testes/demo.txt`.
 
----
+## Comparação com comandos Linux reais
 
-## 9. Roteiro de testes
+Os mesmos passos foram executados em um terminal Linux (Ubuntu 24.04, ext4) e no simulador:
 
-O arquivo [`roteiro.txt`](roteiro.txt) contém uma sessão completa que pode ser executada de uma vez:
+| Passo | Linux | Simulador |
+| --- | --- | --- |
+| `echo "Este e um arquivo de teste" > notas.txt` e `echo segunda linha >> notas.txt` | 41 bytes | 41 bytes (o `echo` também acrescenta `\n`) |
+| `chmod 640 notas.txt` + `ls -li` | `1138789 -rw-r----- 1 root root 41 notas.txt` | `1  -rw-r-----  1  aluno  alunos  41  caractere  ...  notas.txt` |
+| leitura por usuário de "outros" | `cat: notas.txt: Permission denied` | `cat: notas.txt: Permissao negada (...)` |
+| `cp` | inode novo (1138790) | inode novo (2) |
+| `mv copia.txt projetos/backup.txt` | mantém o inode | mantém o inode |
+| `ln notas.txt atalho.txt` | mesmo inode, contador de links = 2 | mesmo inode, `LK` = 2 |
+| `rm notas.txt` | `atalho.txt` continua com o conteúdo, links = 1 | igual |
+| root lendo arquivo `000` | lê normalmente | lê normalmente |
+| root executando arquivo sem bit x | `Permission denied` | `Permissao negada (nem o root executa...)` |
+| `rmdir` de diretório com arquivos | `Directory not empty` | `Diretorio nao vazio` |
+| `chmod 999` | `invalid mode: '999'` | `modo invalido '999'` |
+| `cat fantasma` | `No such file or directory` | `Arquivo ou diretorio nao encontrado` |
+| tamanho do bloco | 4096 bytes (`stat`: 8 setores de 512) | 16 bytes, para que a divisão em blocos fique visível |
 
-```bash
-./mini_file_system < roteiro.txt
-```
+## Limitações
 
-### Validação em Linux
-
-O projeto foi compilado e o `roteiro.txt` executado em **Linux x86-64**:
-
-| Compilador | Flags | Resultado |
-|---|---|---|
-| g++ 9.4 (padrão do Ubuntu 20.04) | `-std=c++17 -Wall -Wextra -pedantic -O2` | compila sem warnings, roteiro OK |
-| g++ 11.4 (padrão do Ubuntu 22.04) | idem | compila sem warnings, roteiro OK |
-| g++ 13.3 (padrão do Ubuntu 24.04) | idem | compila sem warnings, roteiro OK |
-| g++ 16.2 | idem | compila sem warnings, roteiro OK |
-| clang++ 20.1 | idem | compila sem warnings, roteiro OK |
-| g++ 16.2 e clang++ 20.1 | `-g -fsanitize=address,undefined` | nenhum erro de memória, comportamento indefinido ou vazamento (LeakSanitizer) |
-
-A saída no Linux é idêntica à do Windows (MinGW), exceto pelas datas.
-
-O roteiro exercita:
-
-- `mkdir` (incluindo nome duplicado e nome com `/`), `cd` com caminhos relativos, absolutos, `..` e inexistentes, `pwd`, `ls`;
-- `touch` com os quatro tipos, tipo inválido e tipo perguntado interativamente;
-- `echo`/`cat` com conteúdo de vários blocos, validação de arquivo numérico;
-- `chmod` válido e inválido; leitura/escrita negadas para *others* e para *group*; `chmod`/`rm` negados para quem não é dono;
-- `root` lendo arquivo `000` e sendo impedido de executar arquivo sem bit `x`; `exec` liberado após `chmod 755`;
-- `cp` para nome, para `..` e para diretório; `mv` para diretório e com renomeação; `rm` e liberação de blocos (`disk`/`blocks`);
-- comando desconhecido e encerramento por `exit` e por fim da entrada.
-
----
-
-## 10. Limitações
-
-- Os dados existem apenas durante a execução (não há persistência em arquivo).
-- Permissões de **diretórios** não são simuladas; o RWX vale para arquivos.
-- `rmdir` e links (*hard*/*symbolic*) não foram implementados.
-- `exec` apenas verifica o bit `x`; nenhum programa é executado.
-- A troca de usuário (`user`) é didática: não há autenticação.
-- Nomes de arquivos não podem conter espaços (o interpretador separa argumentos por espaço).
+- Os dados existem só durante a execução; não há persistência em arquivo.
+- Diretórios não têm dono nem permissões próprias. Por isso, `rm` e `mv` exigem ser o dono do arquivo, regra que no Linux vale para diretórios com sticky bit, como `/tmp`.
+- `mv` não sobrescreve um arquivo existente no destino; é preciso removê-lo antes.
+- Não há links simbólicos, `mkdir -p` nem leitura/escrita em posições arbitrárias (`seek`).
+- O `exec` não executa código; apenas verifica as permissões e o tipo.
+- A troca de usuário não tem autenticação, e cada usuário pertence a um só grupo.
+- A alocação encadeada é explicada, mas não implementada.

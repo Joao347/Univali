@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-// Classificacao didatica do conteudo do arquivo.
+//classificacao didatica do conteudo do arquivo.
 enum class TipoArquivo {
     NUMERICO,
     CARACTERE,
