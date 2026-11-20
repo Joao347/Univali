@@ -2,6 +2,8 @@
 
 namespace permissoes {
 
+//octal = usuado para mersião ex: 111 = rwx ; 100 r--
+//0777 seria aonde todo mundo tem permissão. 0640 seria rw- (4+2+0) pra dono, r-- para grupo e --- para outros
 bool deOctal(const std::string& texto, unsigned int& saida) {
     std::string digitos = texto;
     //aceita 3 digitos (640) ou 4 com zero inicial (0640)
@@ -21,12 +23,13 @@ std::string paraTexto(unsigned int modo) {
     std::string texto = "---------";
     const char letras[] = {'r', 'w', 'x'};
     for (int i = 0; i < 9; ++i) {
-        const unsigned int bit = 1u << (8 - i);  //do bit 8 (r do owner) ate o bit 0
+        const unsigned int bit = 1u << (8 - i);
         if (modo & bit) texto[i] = letras[i % 3];
     }
     return texto;
 }
 
+//o desloc aqui desloca os bits de permissão
 std::string paraOctal(unsigned int modo) {
     std::string texto;
     texto += static_cast<char>('0' + ((modo >> DESLOC_OWNER) & 7u));

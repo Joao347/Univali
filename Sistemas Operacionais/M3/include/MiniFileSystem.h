@@ -23,7 +23,7 @@ private:
     std::unique_ptr<Diretorio> raiz;
     Diretorio* atual;
     int proximoId;
-    std::string usuarioAtual;
+    std::string usuarioAtual; //verifica se o usuario atual tem permissao de acesso
     std::string grupoAtual;
     DiscoSimulado disco;
 

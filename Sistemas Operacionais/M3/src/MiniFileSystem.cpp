@@ -1,4 +1,4 @@
-//comandos do mini-sistema de arquivos.
+//comandos do mini-sistema de arquivos
 
 #include "MiniFileSystem.h"
 #include "Permissoes.h"
@@ -37,7 +37,7 @@ bool ehNumero(const std::string& texto) {
     return fim && *fim == '\0';
 }
 
-//converte "48 65 6c" ou "48656c" em bytes; retorna false se nao for hexadecimal valido.
+//converte em bytes e retorna false se nao for hexadecimal valido
 bool hexParaBytes(const std::string& texto, std::string& saida) {
     saida.clear();
     int meio = -1;
@@ -52,7 +52,7 @@ bool hexParaBytes(const std::string& texto, std::string& saida) {
             meio = -1;
         }
     }
-    return meio < 0;  //quantidade impar de digitos e invalida
+    return meio < 0;
 }
 
 void imprimirHex(const std::string& dados) {
@@ -79,18 +79,15 @@ MiniFileSystem::MiniFileSystem()
     : raiz(std::make_unique<Diretorio>("/")), atual(raiz.get()),
       proximoId(1), usuarioAtual("aluno"), grupoAtual("alunos") {}
 
-//------------------------------------------------------------------
 //caminhos
-//------------------------------------------------------------------
-
 bool MiniFileSystem::nomeValido(const std::string& nome) {
     if (nome.empty() || nome.size() > MAX_NOME || nome == "." || nome == "..") return false;
     return std::all_of(nome.begin(), nome.end(), [](unsigned char c) {
-        return c != '/' && std::isgraph(c);  //sem barra, espacos ou caracteres de controle
+        return c != '/' && std::isgraph(c);
     });
 }
 
-//percorre a arvore a partir da raiz (caminho absoluto) ou do diretorio atual.
+//percorre a arvore a partir da raiz
 Diretorio* MiniFileSystem::buscarDiretorio(const std::string& caminho) const {
     if (caminho.empty()) return atual;
     Diretorio* diretorio = caminho[0] == '/' ? raiz.get() : atual;
@@ -99,7 +96,7 @@ Diretorio* MiniFileSystem::buscarDiretorio(const std::string& caminho) const {
     while (std::getline(partes, parte, '/')) {
         if (parte.empty() || parte == ".") continue;
         if (parte == "..") {
-            if (diretorio->pai) diretorio = diretorio->pai;  //".." na raiz continua na raiz
+            if (diretorio->pai) diretorio = diretorio->pai;
             continue;
         }
         diretorio = diretorio->buscarFilho(parte);
@@ -108,12 +105,12 @@ Diretorio* MiniFileSystem::buscarDiretorio(const std::string& caminho) const {
     return diretorio;
 }
 
-//separa "a/b/nome" em diretorio pai (a/b) e ultimo componente (nome).
+//separa
 MiniFileSystem::ResultadoCaminho MiniFileSystem::separarCaminho(const std::string& caminho,
                                                                 Diretorio*& pai,
                                                                 std::string& nome) const {
     std::string limpo = caminho;
-    while (limpo.size() > 1 && limpo.back() == '/') limpo.pop_back();  //"docs/" vira "docs"
+    while (limpo.size() > 1 && limpo.back() == '/') limpo.pop_back();
 
     const std::size_t barra = limpo.find_last_of('/');
     if (barra == std::string::npos) {
@@ -128,7 +125,7 @@ MiniFileSystem::ResultadoCaminho MiniFileSystem::separarCaminho(const std::strin
     return ResultadoCaminho::Ok;
 }
 
-//encontra o arquivo indicado; em caso de erro imprime "cmd: caminho: motivo".
+//encontra o arquivo indicado
 Entrada* MiniFileSystem::localizarArquivo(const std::string& cmd, const std::string& caminho,
                                           Diretorio** dirSaida) const {
     Diretorio* pai = nullptr;
@@ -149,7 +146,7 @@ Entrada* MiniFileSystem::localizarArquivo(const std::string& cmd, const std::str
     return entrada;
 }
 
-//destino de cp/mv/ln: se for um diretorio existente, o arquivo mantem o nome original.
+//destino de cp/mv/ln
 bool MiniFileSystem::resolverDestino(const std::string& cmd, const std::string& destino,
                                      const std::string& nomeOrigem, Diretorio*& dir,
                                      std::string& nome) const {
@@ -179,17 +176,14 @@ std::string MiniFileSystem::caminhoCompleto(const Diretorio* diretorio) const {
     return caminho;
 }
 
-//------------------------------------------------------------------
-//protecao
-//------------------------------------------------------------------
-
+//verificar permissao
 bool MiniFileSystem::verificarPermissao(const FCB& arquivo, unsigned int bit, const std::string& cmd,
                                         const std::string& caminho) const {
     if (permissoes::permite(arquivo, usuarioAtual, grupoAtual, bit)) return true;
 
     const std::string simbolico = permissoes::paraTexto(arquivo.permissoes);
     if (usuarioAtual == permissoes::ROOT) {
-        //o root so e barrado na execucao, quando nenhuma classe tem x
+        
         std::cout << cmd << ": " << caminho
                   << ": Permissao negada (nem o root executa: nenhuma classe tem x; permissoes "
                   << simbolico << ")\n";
@@ -212,19 +206,15 @@ bool MiniFileSystem::verificarDono(const FCB& arquivo, const std::string& cmd,
     return false;
 }
 
-//------------------------------------------------------------------
-//apoio
-//------------------------------------------------------------------
 
 std::shared_ptr<FCB> MiniFileSystem::criarArquivo(Diretorio* dir, const std::string& nome,
                                                   TipoArquivo tipo, unsigned int modo) {
     auto fcb = std::make_shared<FCB>(proximoId++, nome, tipo, usuarioAtual, grupoAtual, modo);
-    dir->arquivos.push_back({nome, fcb});  //IDs nunca sao reutilizados
+    dir->arquivos.push_back({nome, fcb}); 
     return fcb;
 }
 
-//remove uma entrada; quando o ultimo link some, devolve os blocos ao disco.
-//retorna quantos links restaram (-1 se a entrada nao existir).
+//remove uma entrada
 int MiniFileSystem::desvincular(Diretorio* dir, const std::string& nome) {
     auto it = std::find_if(dir->arquivos.begin(), dir->arquivos.end(),
                            [&](const Entrada& e) { return e.nome == nome; });
@@ -232,7 +222,7 @@ int MiniFileSystem::desvincular(Diretorio* dir, const std::string& nome) {
     std::shared_ptr<FCB> fcb = it->fcb;
     dir->arquivos.erase(it);
     const int restantes = --fcb->links;
-    if (restantes == 0) disco.liberar(*fcb);  //o FCB e destruido quando o shared_ptr sai de escopo
+    if (restantes == 0) disco.liberar(*fcb);
     return restantes;
 }
 
@@ -257,10 +247,7 @@ std::string MiniFileSystem::dataHora(std::time_t instante) {
     return saida.str();
 }
 
-//------------------------------------------------------------------
-//diretorios: mkdir, rmdir, cd, pwd, ls, tree
-//------------------------------------------------------------------
-
+//diretorios
 void MiniFileSystem::mkdir(const std::string& caminho) {
     Diretorio* pai = nullptr;
     std::string nome;
@@ -270,8 +257,7 @@ void MiniFileSystem::mkdir(const std::string& caminho) {
         return;
     }
     if (r == ResultadoCaminho::NomeInvalido) {
-        std::cout << "mkdir: " << caminho << ": Nome invalido (sem '/', espacos, '.' ou '..'; ate "
-                  << MAX_NOME << " caracteres)\n";
+        std::cout << "mkdir: " << caminho << ": Nome invalido (sem '/', espacos, '.' ou '..'; ate " << MAX_NOME << " caracteres)\n";
         return;
     }
     if (pai->nomeOcupado(nome)) {
@@ -308,7 +294,7 @@ void MiniFileSystem::rmdir(const std::string& caminho) {
         std::cout << "rmdir: " << caminho << ": Diretorio nao vazio\n";
         return;
     }
-    alvo->pai->removerFilho(alvo);  //o unique_ptr libera o no
+    alvo->pai->removerFilho(alvo);
     std::cout << "Diretorio removido: " << caminho << "\n";
 }
 
@@ -386,10 +372,7 @@ void MiniFileSystem::tree(const std::string& caminho) const {
     imprimirArvore(dir, 0);
 }
 
-//------------------------------------------------------------------
-//arquivos: touch, echo, cat, truncate, info, cp, mv, rm, ln
-//------------------------------------------------------------------
-
+//comandos de arquivos
 void MiniFileSystem::touch(const std::string& caminho, const std::string& tipoTexto) {
     TipoArquivo tipo = TipoArquivo::Caractere;
     if (!tipoTexto.empty() && !textoParaTipo(tipoTexto, tipo)) {
@@ -416,7 +399,7 @@ void MiniFileSystem::touch(const std::string& caminho, const std::string& tipoTe
     }
 
     if (Entrada* existente = pai->buscarEntrada(nome)) {
-        //arquivo ja existe: como no Linux, so atualiza as datas (exige ser dono ou ter w)
+        //arquivo ja existe e so atualiza as datas
         FCB& f = *existente->fcb;
         if (!permissoes::ehDono(f, usuarioAtual) &&
             !verificarPermissao(f, permissoes::ESCRITA, "touch", caminho))
@@ -431,11 +414,8 @@ void MiniFileSystem::touch(const std::string& caminho, const std::string& tipoTe
               << tipoParaTexto(tipo) << ", permissoes 644 rw-r--r--)\n";
 }
 
-//echo TEXTO            -> mostra o texto
-//echo TEXTO > ARQ      -> substitui o conteudo (cria o arquivo se nao existir)
-//echo TEXTO >> ARQ     -> acrescenta ao final
+//echo
 void MiniFileSystem::echo(const std::string& argumentos) {
-    //procura o primeiro '>' fora de aspas
     std::size_t redir = std::string::npos;
     char aspas = 0;
     for (std::size_t i = 0; i < argumentos.size(); ++i) {
@@ -449,7 +429,7 @@ void MiniFileSystem::echo(const std::string& argumentos) {
     if (texto.size() >= 2 && (texto[0] == '"' || texto[0] == '\'') && texto.back() == texto[0])
         texto = texto.substr(1, texto.size() - 2);  //tira as aspas externas
 
-    if (redir == std::string::npos) {  //sem redirecionamento: comporta-se como o echo comum
+    if (redir == std::string::npos) { 
         std::cout << texto << "\n";
         return;
     }
@@ -532,7 +512,7 @@ void MiniFileSystem::cat(const std::string& caminho) {
     if (!conteudo.empty() && conteudo.back() != '\n') std::cout << "\n";
 }
 
-//truncate ARQ: zera o arquivo e devolve todos os blocos (como "truncate -s 0").
+//truncate
 void MiniFileSystem::truncate(const std::string& caminho) {
     Entrada* entrada = localizarArquivo("truncate", caminho);
     if (!entrada || !verificarPermissao(*entrada->fcb, permissoes::ESCRITA, "truncate", caminho)) return;
@@ -590,7 +570,7 @@ void MiniFileSystem::cp(const std::string& origem, const std::string& destino) {
     const std::string conteudo = disco.recuperar(*original);
     original->acesso = std::time(nullptr);
 
-    //destino existente: sobrescreve o conteudo dele; senao cria um FCB novo
+    //destino existente
     std::shared_ptr<FCB> alvo = existente ? existente->fcb
                                           : criarArquivo(dir, nome, original->tipo, original->permissoes);
     const ResultadoDisco resultado = disco.armazenar(*alvo, conteudo);
@@ -620,7 +600,7 @@ void MiniFileSystem::mv(const std::string& origem, const std::string& destino) {
         return;
     }
 
-    //mover = criar a entrada nova e apagar a antiga; o FCB (inode) e os blocos sao os mesmos
+    //mover
     std::shared_ptr<FCB> fcb = entrada->fcb;
     const std::string nomeAntigo = entrada->nome;
     dir->arquivos.push_back({nome, fcb});
@@ -649,7 +629,7 @@ void MiniFileSystem::ln(const std::string& origem, const std::string& destino) {
     Entrada* entrada = localizarArquivo("ln", origem);
     if (!entrada) return;
     const FCB& f = *entrada->fcb;
-    //regra do Linux (protected_hardlinks): ser dono ou ter leitura e escrita
+    //regra do Linux ser dono ou ter leitura e escrita
     if (!permissoes::ehDono(f, usuarioAtual) &&
         !(permissoes::permite(f, usuarioAtual, grupoAtual, permissoes::LEITURA) &&
           permissoes::permite(f, usuarioAtual, grupoAtual, permissoes::ESCRITA))) {
@@ -670,11 +650,8 @@ void MiniFileSystem::ln(const std::string& origem, const std::string& destino) {
               << entrada->fcb->links << " links)\n";
 }
 
-//------------------------------------------------------------------
-//protecao e disco: chmod, user, exec, blocks, alloc
-//------------------------------------------------------------------
-
-void MiniFileSystem::chmod(const std::string& modo, const std::string& caminho) {
+void MiniFileSystem::
+(const std::string& modo, const std::string& caminho) { //aqui valida o mecanismo de proteção
     unsigned int novo = 0;
     if (!permissoes::deOctal(modo, novo)) {
         std::cout << "chmod: modo invalido '" << modo
@@ -738,10 +715,7 @@ void MiniFileSystem::alloc(const std::string& modo) {
               << " (vale para as proximas gravacoes)\n";
 }
 
-//------------------------------------------------------------------
-//interpretador
-//------------------------------------------------------------------
-
+//help
 void MiniFileSystem::mostrarAjuda() {
     std::cout <<
         "Diretorios\n"
